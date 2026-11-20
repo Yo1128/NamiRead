@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="NamiRead 是 Android 本地阅读器。导入 TXT、EPUB，下载书源作品，在手机或平板上离线阅读。">
+  <meta name="theme-color" content="#fafaf8">
+  <title>NamiRead · Android 本地阅读器</title>
+  <link rel="icon" href="images/icon.png" type="image/png">
+  <link rel="stylesheet" href="style.css">
+  <script src="reader.js" defer></script>
+</head>
+<body>
+  <header class="mast">
+    <span class="brand"><img src="images/icon.png" width="44" height="44" alt="">NamiRead</span>
+    <a href="https://github.com/Yo1128/NamiRead">GitHub <span aria-hidden="true">↗</span></a>
+  </header>
+  <main>
+    <section class="intro" aria-labelledby="title">
+      <div class="lead">
+        <h1 id="title">你的本地书架</h1>
+        <p>导入 TXT、EPUB，或从书源下载整本书。<br class="wide">在手机和平板上，从上次读到的那句话继续。</p>
+        <a class="download" href="https://github.com/Yo1128/NamiRead/releases/download/v0.5.5/NamiRead-0.5.5.apk">下载 Android 版 <span aria-hidden="true">↓</span></a>
+        <small>0.5.5 · Android 7.0 及以上</small>
+      </div>
+      <section class="book" aria-label="随附样书《潮汐手记》试读">
+        <div class="jacket"><span>潮汐手记</span></div>
+        <div class="leaf">
+          <p class="running-head">潮汐手记 <span>试读</span></p>
+          <div class="passages" aria-live="polite">
+            <article><h2>抵岸</h2><p>车门打开的一刻，海风先挤进了车厢。车站离水还有两条街，我却已经听见了碎石在浪底滚动的声音。</p><p>寄存处的人给了我一把小钥匙。那是我在这座陌生小城里拥有的第一件东西。</p></article>
+            <article hidden><h2>堤上的风</h2><p>老堤从街尾起步，拐过水塔，笔直地伸进灰色海面。沿途没有椅子，只有几块朝向不同的石头。</p><p>有人用白漆在石头上写了年份。雨水抹去了一半数字，剩下的几笔，恰好像一小群掠过水面的鸟。</p></article>
+            <article hidden><h2>潮线</h2><p>退潮以后，海在沙上留了一条细线。它绕过礁石，在一截漂木前分开，又在更远处合拢。我沿着它走，像沿着一封还没有读完的信。</p><p>早晨的堤岸很静。远处有人把一只旧木船翻过来，敲掉船底的藤壶。</p></article>
+          </div>
+          <nav class="turns" aria-label="试读翻页" hidden>
+            <output aria-label="页码">1 / 3</output>
+            <button type="button" id="prev" aria-label="上一页" disabled>←</button>
+            <button type="button" id="next" aria-label="下一页">→</button>
+          </nav>
+        </div>
+      </section>
+    </section>
+    <dl class="features">
+      <div><dt>翻页与排版</dt><dd>左右滑动翻页，按喜好调整字号、行距和页边距。横置平板可以并排读两页。</dd></div>
+      <div><dt>书源与离线</dt><dd>导入书源后可搜索作品、浏览目录。下载支持暂停和续传，整书可另存为 TXT。</dd></div>
+      <div><dt>书签与备份</dt><dd>阅读进度自动保存在设备上。更换设备时，可通过备份带走藏书、书签和阅读位置。</dd></div>
+    </dl>
+  </main>
+  <footer><span>NamiRead</span><a href="https://github.com/Yo1128/NamiRead/releases">所有版本 ↗</a></footer>
+</body>
+</html>

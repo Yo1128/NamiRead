@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; font-src 'self' file:; style-src 'unsafe-inline'; script-src 'sha256-7hd5kzLokSPjZg5l8j+ulOTjCiuF3+BCowhlJQ5pDp0='; base-uri 'none'; form-action 'none'">
+<style>
+@font-face{font-family:MiSans;src:url('../fonts/MiSans-VF.ttf') format('truetype');font-weight:150 700;font-display:block}
+:root{--page-inset:12px;--paper:transparent;--ink:#171717;--muted:#606060;--size:19px;--line:1.9;--margin:24px;--width:620px;--gap:32px;--body-face:MiSans,sans-serif;color-scheme:light}
+@media(min-width:600px) and (min-height:480px){:root{--page-inset:24px}}
+*{box-sizing:border-box}
+html,body{height:100%;width:100%;margin:0;overflow:hidden;overscroll-behavior:none;touch-action:none;background:var(--paper);color:var(--ink);font-family:MiSans,sans-serif}
+#page-window{position:absolute;top:var(--page-inset);bottom:var(--page-inset);left:0;right:0;width:calc(100% - 2 * var(--margin));max-width:var(--width);margin:auto;overflow:hidden;overflow:clip}
+#page-surface{position:absolute;inset:0 auto 0 0;width:100%;overflow:hidden;overflow-anchor:none;will-change:transform}
+.tools-open #page-window{top:calc(var(--page-inset) + var(--tools-top));bottom:calc(var(--page-inset) + var(--tools-bottom))}
+.tools-open img{max-height:calc(100vh - 2 * var(--page-inset) - var(--tools-top) - var(--tools-bottom) - 2.4em)}
+.tools-open nav{bottom:calc(var(--page-inset) + var(--tools-bottom))}
+main{width:var(--view-width,100%);height:100%;column-count:1;column-gap:var(--gap);column-fill:auto;font:var(--size)/var(--line) var(--body-face);overflow-wrap:anywhere;orphans:1;widows:1}
+#extent{position:absolute;top:0;width:1px;height:1px;pointer-events:none}
+figcaption{font:400 .78em/1.45 MiSans,sans-serif;color:var(--muted)}
+h1,h2,h3{line-height:1.28;margin:0 0 .7em;font-weight:650;break-after:avoid}
+h1{font-size:1.55em}h2{font-size:1.25em}
+p{margin:0 0 .45em;text-align:justify}
+img{display:block;max-width:100%;max-height:calc(100vh - 2 * var(--page-inset) - 2.4em);width:auto;height:auto;object-fit:contain;margin:0 auto}
+figure{margin:0 0 .45em;break-inside:avoid}figcaption{margin-top:.35em}
+a{color:inherit;text-underline-offset:3px}
+pre,code{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
+table{width:100%;max-width:100%;table-layout:fixed;border-collapse:collapse}td,th{overflow-wrap:anywhere}
+blockquote{margin:.35em .7em}
+nav{position:absolute;bottom:var(--page-inset);left:0;right:0;max-width:var(--width);width:calc(100% - 2 * var(--margin));margin:auto;display:flex;justify-content:space-between;align-items:center;border-top:1px solid #8886}
+nav[hidden]{display:none}
+@media(min-width:720px){
+  .spread{--columns:2;--gap:48px}
+  .spread #page-window{max-width:calc(2 * var(--width) + var(--gap))}
+  .spread main{width:calc((var(--view-width,100%) - var(--gap)) / 2)}
+  .spread body::before{content:"";position:absolute;left:50%;top:var(--page-inset);bottom:var(--page-inset);width:1px;background:var(--ink);opacity:.12;pointer-events:none}
+  .spread nav{width:calc((100% - 2 * var(--margin) - var(--gap)) / 2);transform:translateX(calc(-50% - var(--gap) / 2))}
+  .spread.right-end nav{transform:translateX(calc(50% + var(--gap) / 2))}
+}
+#show-tools{position:absolute;right:8px;bottom:8px;background:var(--paper);color:var(--ink)}
+#show-tools:not(:focus){width:1px;height:1px;min-height:0;padding:0;overflow:hidden;clip-path:inset(50%)}
+button{min-height:48px;background:none;color:inherit;border:0;font:400 15px MiSans,sans-serif;padding:0 8px}
+button:disabled{opacity:.35}::selection{background:#7776}
+</style>
+</head>
+<body>
+<button id="show-tools">显示阅读工具</button>
+<div id="page-window"><div id="page-surface"><main><h1 id="chapter-title"></h1><article id="text"></article></main><i id="extent" aria-hidden="true"></i></div></div>
+<nav hidden><button id="prev">← 上一章</button><button id="next">下一章 →</button></nav>
+<script>
+(function(){
+'use strict';
+const surface=document.getElementById('page-surface'), flow=surface.querySelector('main');
+const viewport=surface.parentElement;
+const body=document.getElementById('text'), title=document.getElementById('chapter-title');
+const extent=document.getElementById('extent'), nav=document.querySelector('nav');
+const toolButton=document.getElementById('show-tools');
+const previous=document.getElementById('prev'), next=document.getElementById('next');
+let chapter=null, active=false, nodes=[], images=[], sections=[], stablePoint=null;
+let screenIndex=0, screenCount=1, stride=1, height=0, width=0, reduceMotion=false;
+let columns=1, leafCount=1, leafStride=1;
+let gesture=null, tap=null, blockClick=false, animation=null, slide=null;
+const pagePoints=new Map();
+const characterRange=document.createRange();
+let idlePoint=0;
+const motionPreference=matchMedia('(prefers-reduced-motion: reduce)');
+function motionOff(){return reduceMotion || motionPreference.matches;}
+let toolsVisible=false;
+function post(type,fields){
+  if(chapter)Nami.postMessage(JSON.stringify(Object.assign({
+    type,token:chapter.token,page:screenIndex*columns+1,
+    lastPage:Math.min((screenIndex+1)*columns,leafCount),pages:leafCount
+  },fields)));
+}
+function charRect(node,at){
+  const r=characterRange;
+  r.setStart(node,at);
+  r.setEnd(node,Math.min(at+1,node.length));
+  return r.getClientRects()[0] || r.getBoundingClientRect();
+}
+function pageOrigin(){return surface.getBoundingClientRect().left-surface.scrollLeft;}
+function leafOf(rect,origin=pageOrigin()){
+  // Rects are relative to the visible viewport. Recover the column in the chapter.
+  const x=rect.left-origin;
+  return Math.max(0,Math.min(leafCount-1,Math.floor((x+1)/leafStride)));
+}
+function screenOf(rect,origin){return Math.floor(leafOf(rect,origin)/columns);}
+function firstAtOrAfter(length,match){
+  let lo=0,hi=length;
+  while(lo<hi){
+    const mid=Math.floor((lo+hi)/2);
+    if(match(mid))hi=mid;
+    else lo=mid+1;
+  }
+  return lo;
+}
+function locate(targetScreen=screenIndex){
+  const point={top:targetScreen===0,node:0,ch:0,context:'',fraction:0};
+  if(point.top)return point;
+  const origin=pageOrigin();
+  let textLeaf=Infinity,textY=Infinity;
+  if(nodes.length){
+    const index=firstAtOrAfter(nodes.length,i=>screenOf(charRect(nodes[i],nodes[i].length-1),origin)>=targetScreen);
+    const n=nodes[Math.min(index,nodes.length-1)];
+    const ch=Math.min(n.length-1,firstAtOrAfter(n.length,i=>screenOf(charRect(n,i),origin)>=targetScreen));
+    point.node=Math.min(index,nodes.length-1);
+    point.ch=ch;
+    point.context=n.data.substr(ch,24);
+    point.fraction=(point.node+ch/n.length)/nodes.length;
+    const rect=charRect(n,ch);
+    if(screenOf(rect,origin)===targetScreen){textLeaf=leafOf(rect,origin);textY=rect.top;}
+  }
+  const image=firstAtOrAfter(images.length,i=>screenOf(images[i].getBoundingClientRect(),origin)>=targetScreen);
+  if(image<images.length){
+    const rect=images[image].getBoundingClientRect();
+    const leaf=leafOf(rect,origin);
+    if(screenOf(rect,origin)===targetScreen && (leaf<textLeaf || (leaf===textLeaf && rect.top<=textY))){
+      point.image=image;point.imageOffset=0;
+      if(!nodes.length)point.fraction=image/images.length;
+    }
+  }
+  const after=firstAtOrAfter(sections.length,i=>screenOf(sections[i].getClientRects()[0],origin)>=targetScreen);
+  const section=sections[after];
+  if(section && screenOf(section.getClientRects()[0],origin)===targetScreen)point.section=section.id;
+  else if(after>0)point.section=sections[after-1].id;
+  return point;
+}
+function prepareAdjacentPoints(){
+  if(!window.requestIdleCallback || idlePoint || !active || gesture || slide)return;
+  for(const key of pagePoints.keys())if(Math.abs(key-screenIndex)>1)pagePoints.delete(key);
+  const target=[screenIndex+1,screenIndex-1].find(i=>i>=0 && i<screenCount && !pagePoints.has(i));
+  if(target===undefined)return;
+  idlePoint=requestIdleCallback(()=>{
+    idlePoint=0;
+    if(!active || gesture || slide)return;
+    if(Math.abs(target-screenIndex)===1)pagePoints.set(target,locate(target));
+    prepareAdjacentPoints();
+  });
+}
+function measure(){
+  pagePoints.clear();
+  if(idlePoint){cancelIdleCallback(idlePoint);idlePoint=0;}
+  width=viewport.clientWidth;height=viewport.clientHeight;
+  flow.style.setProperty('--view-width',width+'px');
+  const css=getComputedStyle(flow), gap=parseFloat(css.columnGap);
+  columns=Number(css.getPropertyValue('--columns')) || 1;
+  leafStride=flow.getBoundingClientRect().width+gap;
+  leafCount=Math.max(1,Math.ceil((flow.scrollWidth+gap-1)/leafStride));
+  stride=columns*leafStride;
+  screenCount=Math.ceil(leafCount/columns);
+  // Reserve the empty facing page on an odd ending so the last left page can align.
+  extent.style.left=((screenCount-1)*stride+width-1)+'px';
+  document.documentElement.classList.toggle('right-end',columns===2 && leafCount%2===0);
+}
+function setScreen(value){
+  screenIndex=Math.max(0,Math.min(screenCount-1,value));
+  surface.scrollLeft=screenIndex*stride;
+  updateNav();
+}
+function updateNav(){
+  if(!toolsVisible || screenIndex!==screenCount-1){nav.hidden=true;return;}
+  const rects=body.getClientRects(), end=rects[rects.length-1];
+  nav.hidden=!end || surface.getBoundingClientRect().bottom-end.bottom<54;
+}
+function tools(visible){
+  toolsVisible=!!visible;toolButton.hidden=toolsVisible;
+  document.documentElement.classList.toggle('tools-open',toolsVisible);
+  updateNav();
+}
+function fragmentPoint(element){
+  // A link can lead to the right leaf of the very first spread. Keep that
+  // destination when a narrower window separates the two leaves again.
+  const point=locate(), index=nodes.findIndex(node=>element.contains(node));
+  const image=element.matches('img')?element:element.querySelector('img');
+  if(index>=0){
+    point.node=index;point.ch=0;point.context=nodes[index].data.substr(0,24);
+    point.fraction=index/nodes.length;
+    delete point.image;delete point.imageOffset;
+  }
+  if(image && (index<0 || (image.compareDocumentPosition(nodes[index]) & Node.DOCUMENT_POSITION_FOLLOWING))){
+    point.image=images.indexOf(image);point.imageOffset=0;
+    if(!nodes.length)point.fraction=point.image/images.length;
+  }
+  point.top=false;point.fragment=element.id;
+  if(sections.includes(element))point.section=element.id;
+  return point;
+}
+function restore(point){
+  let target=0,valid=true,fragment=null;
+  if(point && !point.top){
+    if(point.end)target=screenCount-1;
+    else if(point.fragment){
+      const el=Array.from(body.querySelectorAll('[id]')).find(e=>e.id===point.fragment);
+      const rect=el && el.getClientRects()[0];
+      if(rect){target=screenOf(rect);fragment=el;}else valid=false;
+    }else if(Number.isInteger(point.image) && images[point.image]){
+      target=screenOf(images[point.image].getBoundingClientRect());
+    }else{
+      const n=nodes[point.node], ch=point.ch || 0;
+      valid=!!n && Number.isInteger(ch) && ch>=0 && ch<n.length &&
+        (!point.context || n.data.substr(ch,point.context.length)===point.context);
+      if(valid)target=screenOf(charRect(n,ch));
+    }
+  }
+  setScreen(target);
+  // Preserve the exact old character through successive font and viewport changes.
+  if(fragment && !Number.isInteger(point.node))stablePoint=fragmentPoint(fragment);
+  else stablePoint=valid && point && !point.end ? point : locate();
+  return valid;
+}
+function setStyle(p){
+  const style=document.documentElement.style, night=p.tone===2;
+  document.documentElement.classList.toggle('spread',!!p.spread);
+  style.setProperty('--paper',['#fafafa','#e5e5e1','#181818'][p.tone]);
+  style.setProperty('--ink',night?'#e4e4df':'#171717');
+  style.setProperty('--muted',night?'#adada7':'#606060');
+  style.setProperty('--body-face',p.serif?'serif':'MiSans,sans-serif');
+  style.setProperty('--size',p.size+'px');style.setProperty('--line',p.leading);
+  style.setProperty('--margin',p.margin+'px');style.setProperty('--width',p.width+'px');
+  reduceMotion=!!p.reduceMotion;
+  style.setProperty('--tools-top',p.toolsTop+'px');
+  style.setProperty('--tools-bottom',p.toolsBottom+'px');
+  tools(p.toolsVisible);
+}
+function save(){if(active)post('save',{point:stablePoint});}
+function reflow(){
+  if(!active || !surface.clientHeight || !surface.clientWidth)return;
+  resetDrag();
+  measure();restore(stablePoint);post('layout');prepareAdjacentPoints();
+}
+function resetDrag(freeze=false){
+  gesture=null;
+  if(slide){
+    // A second swipe starts at the visible pixel, even midway through a settle.
+    const x=freeze ? surface.scrollLeft+viewport.getBoundingClientRect().left-
+      surface.getBoundingClientRect().left : screenIndex*stride;
+    slide.cancel();slide=null;
+    surface.style.width='';surface.scrollLeft=x;
+  }
+  surface.style.transform='';
+  if(animation){animation.cancel();animation=null;}
+}
+function animate(offset){
+  if(!offset || motionOff())return;
+  animation=surface.animate([{transform:'translateX('+offset+'px)'},{transform:'none'}],
+    {duration:135,easing:'cubic-bezier(.2,.7,.2,1)'});
+}
+function settle(){
+  const from=surface.scrollLeft,to=screenIndex*stride, distance=Math.abs(to-from);
+  if(motionOff() || distance<1){
+    setScreen(screenIndex);prepareAdjacentPoints();return;
+  }
+  // Only the visible slice between release and destination moves. The column
+  // width stays fixed, so Chromium can composite the slide without repaginating.
+  nav.hidden=true;
+  surface.style.width=(width+distance)+'px';
+  surface.scrollLeft=Math.min(from,to);
+  const base=surface.scrollLeft;
+  const transform=x=>'translateX('+x+'px)';
+  const motion=surface.animate([
+    {transform:transform(base-from)},{transform:transform(base-to)}
+  ],{duration:100+70*Math.min(1,distance/stride),easing:'cubic-bezier(.24,.62,.35,1)',fill:'both'});
+  slide=motion;
+  if(document.timeline && document.timeline.currentTime!=null)motion.startTime=document.timeline.currentTime;
+  motion.onfinish=()=>{
+    if(slide!==motion)return;
+    resetDrag();setScreen(screenIndex);prepareAdjacentPoints();
+  };
+}
+function drawDrag(dx){
+  if(!gesture || motionOff())return;
+  const wanted=gesture.origin-dx;
+  const left=Math.max(Math.max(0,screenIndex-1)*stride,Math.min(Math.min(screenCount-1,screenIndex+1)*stride,wanted));
+  surface.scrollLeft=left;
+  // A chapter or book boundary has no adjacent column to reveal.
+  const edge=Math.max(-18,Math.min(18,(left-wanted)*.14));
+  if(edge!==gesture.edge){
+    gesture.edge=edge;surface.style.transform=edge?'translateX('+edge+'px)':'';
+  }
+}
+function cancelGesture(){
+  const edge=gesture && gesture.edge;
+  resetDrag();
+  if(active){settle();animate(edge);}
+}
+function turn(direction){
+  if(!active || Math.abs(direction)!==1)return;
+  const edge=gesture && gesture.edge;
+  resetDrag(true);
+  const target=screenIndex+direction;
+  if(target>=0 && target<screenCount){
+    // Rects are in chapter coordinates even midway between two columns.
+    // Commit once on release; interruption or backgrounding keeps that anchor.
+    screenIndex=target;stablePoint=pagePoints.get(target) || locate(target);settle();save();
+  }else if((direction>0 && !chapter.last) || (direction<0 && chapter.index>0)){
+    setScreen(screenIndex);
+    if(edge && !motionOff())surface.style.transform='translateX('+edge+'px)';
+    active=false;post('turnChapter',{direction});
+  }else{settle();animate(edge);}
+}
+window.reader={
+  async show(data,fragment,pref,point){
+    const opening=!chapter;
+    active=false;resetDrag();chapter=data;stablePoint=null;setStyle(pref);
+    nav.hidden=true;surface.scrollLeft=0;
+    body.innerHTML=fragment;
+    const first=body.querySelector('h1,h2,h3');
+    title.hidden=!!first && first.textContent.trim()===data.title;title.textContent=data.title;
+    previous.disabled=data.index===0;next.textContent=data.last?'返回书架':'下一章 →';
+    const targets=new Set(data.sections || []);
+    sections=Array.from(body.querySelectorAll('[id]')).filter(el=>targets.has(el.id) && el.getClientRects().length);
+    images=Array.from(body.querySelectorAll('img'));
+    const walker=document.createTreeWalker(body,NodeFilter.SHOW_TEXT);
+    nodes=[];let node,count=0;
+    while((node=walker.nextNode())){
+      if(node.data.trim() && node.parentElement.getClientRects().length)nodes.push(node);
+      if(++count%512===0){
+        await new Promise(done=>setTimeout(done,0));
+        if(chapter!==data)return;
+      }
+    }
+    await Promise.all([document.fonts.ready,...images.map(im=>im.decode ? im.decode().catch(()=>{}) : Promise.resolve())]);
+    if(chapter!==data)return;
+    measure();const ok=restore(point);active=true;
+    if(data.turn)animate(data.turn*18);
+    if(opening){
+      // The shelf uncovers the first page only after the restored text has painted.
+      await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      if(chapter!==data)return;
+    }
+    post('ready',{ok,point:stablePoint});
+    prepareAdjacentPoints();
+  },
+  capture(){return JSON.stringify({token:chapter && chapter.token,point:active?stablePoint:null});},
+  style(pref){setStyle(pref);reflow();},
+  turn,save,tools
+};
+function resize(){
+  if(width!==viewport.clientWidth || height!==viewport.clientHeight ||
+     columns!==(Number(getComputedStyle(flow).getPropertyValue('--columns')) || 1))reflow();
+}
+if(window.ResizeObserver){
+  const observer=new ResizeObserver(resize);
+  observer.observe(viewport);observer.observe(flow);
+}
+else addEventListener('resize',resize);
+document.addEventListener('visibilitychange',()=>{if(document.hidden && active){resetDrag();setScreen(screenIndex);save();}});
+previous.onclick=()=>post('prev');next.onclick=()=>post('next');
+toolButton.onclick=()=>post('chrome');
+document.addEventListener('keydown',e=>{
+  if(e.altKey || e.ctrlKey || e.metaKey || !getSelection().isCollapsed)return;
+  if(['ArrowRight','PageDown','ArrowLeft','PageUp'].includes(e.key)){
+    e.preventDefault();turn(e.key==='ArrowRight' || e.key==='PageDown'?1:-1);
+  }
+});
+body.addEventListener('focusin',e=>{
+  if(!active)return;
+  resetDrag();
+  const rect=e.target.getClientRects()[0];
+  const target=rect?screenOf(rect):screenIndex, changed=target!==screenIndex;
+  setScreen(target);
+  if(changed){stablePoint=locate();save();}
+});
+document.addEventListener('touchstart',e=>{
+  if(e.touches.length!==1){blockClick=true;cancelGesture();return;}
+  blockClick=false;
+  const t=e.touches[0];
+  if(!active || t.clientX<24 || t.clientX>innerWidth-24 || !getSelection().isCollapsed)return;
+  resetDrag(true);
+  gesture={x:t.clientX,y:t.clientY,time:e.timeStamp,locked:false,origin:surface.scrollLeft,edge:0};
+},{passive:true});
+document.addEventListener('touchmove',e=>{
+  if(!gesture)return;
+  const t=e.touches[0],dx=t.clientX-gesture.x,dy=t.clientY-gesture.y;
+  if(!gesture.locked){
+    if(Math.max(Math.abs(dx),Math.abs(dy))<9)return;
+    blockClick=true;
+    if(Math.abs(dx)<1.5*Math.abs(dy) || e.timeStamp-gesture.time>450 || !getSelection().isCollapsed){
+      cancelGesture();return;
+    }
+    gesture.locked=true;
+    nav.hidden=true;
+  }
+  drawDrag(dx);
+},{passive:true});
+document.addEventListener('touchend',e=>{
+  if(!gesture)return;
+  const drag=gesture,t=e.changedTouches[0],dx=t.clientX-drag.x,dy=t.clientY-drag.y;
+  if(!drag.locked){cancelGesture();return;}
+  drawDrag(dx);
+  if(Math.abs(dx)>=Math.max(38,Math.min(64,innerWidth*.13)) && Math.abs(dx)>=1.4*Math.abs(dy))
+    turn(dx<0?1:-1);
+  else cancelGesture();
+},{passive:true});
+document.addEventListener('touchcancel',cancelGesture,{passive:true});
+document.addEventListener('contextmenu',cancelGesture);
+document.addEventListener('pointerdown',e=>{
+  if(e.pointerType!=='touch')blockClick=false;
+  tap={x:e.clientX,y:e.clientY,time:e.timeStamp};
+});
+document.addEventListener('click',e=>{
+  if(blockClick && e.detail!==0){e.preventDefault();e.stopImmediatePropagation();return;}
+  const link=e.target.closest('a');
+  if(link){e.preventDefault();if(link.dataset.target)post('link',{target:link.dataset.target});return;}
+  if(e.target.closest('button') || !tap || !getSelection().isCollapsed || e.timeStamp-tap.time>450 ||
+     Math.hypot(e.clientX-tap.x,e.clientY-tap.y)>8)return;
+  post('chrome');
+},true);
+})();
+</script></body></html>

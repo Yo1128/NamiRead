@@ -7,6 +7,11 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'library.dart';
 import 'backup_sheet.dart';
 import 'import_sheet.dart';
+import 'hub_browser.dart';
+import 'hub_library.dart';
+
+import 'package:nami_hub_client/nami_hub_client.dart';
+
 import 'reader.dart';
 import 'source_browser.dart';
 import 'source_download_actions.dart';
@@ -150,10 +155,12 @@ class _ShelfState extends State<Shelf> {
   final searchField = TextEditingController();
   String filter = '全部';
   Library get lib => widget.lib;
+  late final hubs = HubLibrary(lib);
   bool get list => lib.settings['shelfList'] != false;
   String get sort => lib.settings['shelfSort'] ?? '最近阅读';
   @override
   void dispose() {
+    hubs.dispose();
     searchField.dispose();
     super.dispose();
   }
@@ -189,16 +196,82 @@ class _ShelfState extends State<Shelf> {
                 '${book.author} · ${book.format} · ${book.chapters.length} 章',
               ),
               const SizedBox(height: 22),
-              if (book.isSourceBook)
+              if (book.isHubBook)
+                Text(
+                  lib.findBook(book.meta['hubItem']['sha256']) == null
+                      ? 'NamiHub · 在线阅读'
+                      : 'NamiHub · 可离线阅读',
+                )
+              else if (book.isSourceBook)
                 SelectableText('书源　${book.meta['bookSourceUrl']}')
               else
                 Text('原文件　$source'),
-              Text(book.isSourceBook ? '入架于　$date' : '导入于　$date'),
+              Text(
+                book.isSourceBook || book.isHubBook ? '入架于　$date' : '导入于　$date',
+              ),
               SelectableText(
-                '内容指纹　${book.id.substring(0, book.id.length.clamp(0, 12))}',
+                '内容指纹　${(book.meta['hubItem']?['sha256'] as String? ?? book.id).substring(0, book.id.length.clamp(0, 12))}',
               ),
               const SizedBox(height: 16),
               if (book.isSourceBook) SourceDownloadActions(lib, book),
+              if (book.isHubBook &&
+                  lib.findBook(book.meta['hubItem']['sha256']) == null)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.download_outlined),
+                  title: const Text('下载到本机'),
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    try {
+                      await hubs.load();
+                      final host = hubs.hosts
+                          .where((h) => h.id == book.meta['hubId'])
+                          .firstOrNull;
+                      if (host == null) {
+                        throw const FormatException('请在 NamiHub 书目中重新配对。');
+                      }
+                      if (!mounted) return;
+                      await downloadHubBook(
+                        context,
+                        hubs,
+                        host,
+                        HubResource.fromJson(Data.from(book.meta['hubItem'])),
+                      );
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('已下载，可离线阅读')),
+                        );
+                      }
+                    } catch (error) {
+                      if (mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text(hubMessage(error))),
+                        );
+                      }
+                    }
+                  },
+                ),
+              if (book.isHubBook)
+                if (lib.findBook(book.meta['hubItem']['sha256'])
+                    case final local?)
+                  if (hubs.canRemoveCopy(local))
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.download_done_outlined),
+                      title: const Text('移除本机下载'),
+                      onTap: () async {
+                        try {
+                          await hubs.removeCopy(book);
+                          if (ctx.mounted) Navigator.pop(ctx);
+                        } catch (error) {
+                          if (ctx.mounted) {
+                            ScaffoldMessenger.of(ctx).showSnackBar(
+                              SnackBar(content: Text(hubMessage(error))),
+                            );
+                          }
+                        }
+                      },
+                    ),
               const Divider(height: 1),
               ListTile(
                 contentPadding: EdgeInsets.zero,
@@ -212,12 +285,19 @@ class _ShelfState extends State<Shelf> {
       ),
     );
     if (remove != true || !mounted) return;
+    final localCopy = book.isHubBook
+        ? lib.findBook(book.meta['hubItem']['sha256'])
+        : null;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('从书架移除这本书？'),
         content: Text(
-          book.isSourceBook
+          book.isHubBook
+              ? localCopy != null && lib.canRemoveHubCopy(localCopy)
+                    ? '将移除这本共享书的本机下载、进度和书签。电脑上的原书会保留。'
+                    : '将移除这条共享书目及其阅读记录。电脑上的原书会保留。'
+              : book.isSourceBook
               ? '将删除《${book.title}》的目录、已缓存章节、进度和书签。'
               : '《${book.title}》的应用内副本、进度和书签将被删除。手机中的原文件会保留。',
         ),
@@ -249,16 +329,33 @@ class _ShelfState extends State<Shelf> {
     }
   }
 
-  Future<void> openImport() => showModalBottomSheet<void>(
-    context: context,
-    sheetAnimationStyle: sheetMotion(context),
-    isScrollControlled: true,
-    enableDrag: false,
-    builder: (_) => ImportSheet(lib),
-  );
+  Future<void> openImport() async {
+    final fromHub = await showModalBottomSheet<bool>(
+      context: context,
+      sheetAnimationStyle: sheetMotion(context),
+      isScrollControlled: true,
+      enableDrag: false,
+      builder: (_) => ImportSheet(lib),
+    );
+    if (fromHub != true || !mounted) return;
+    final route = MaterialPageRoute<Book>(builder: (_) => HubBrowser(hubs));
+    final book = await Navigator.push(context, route);
+    await route.completed;
+    if (book != null && mounted && ModalRoute.of(context)?.isCurrent == true) {
+      await read(book);
+    }
+  }
 
   Future<void> read(Book book) async {
     if (reading) return;
+    if (book.isHubBook) {
+      final local = lib.findBook(book.meta['hubItem']['sha256']);
+      if (local != null &&
+          local.format == 'TXT' &&
+          local.meta['encoding'] != 'UTF-8') {
+        book = local;
+      }
+    }
     final reduced = MediaQuery.disableAnimationsOf(context);
     setState(() => reading = true);
     try {
@@ -281,7 +378,7 @@ class _ShelfState extends State<Shelf> {
               ? Duration.zero
               : const Duration(milliseconds: 145),
           pageBuilder: (_, _, _) =>
-              Reader(lib, book, openingShelf: openingShelf),
+              Reader(lib, book, hub: hubs, openingShelf: openingShelf),
           transitionsBuilder: (_, animation, _, child) => FadeTransition(
             opacity: animation.drive(CurveTween(curve: Curves.easeOutCubic)),
             child: child,
@@ -339,7 +436,7 @@ class _ShelfState extends State<Shelf> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (lib.books.isNotEmpty) ...[
+                if (lib.shelfBooks.isNotEmpty) ...[
                   group('筛选', ['全部', '在读', '未读'], filter),
                   group('排序', ['最近阅读', '最近导入', '书名'], sort),
                   group('视图', ['列表', '封面'], list ? '列表' : '封面'),
@@ -702,7 +799,7 @@ class _ShelfState extends State<Shelf> {
                             icon: Icon(managing ? Icons.check : Icons.close),
                           )
                         else ...[
-                          if (lib.books.isNotEmpty) ...[
+                          if (lib.shelfBooks.isNotEmpty) ...[
                             IconButton(
                               tooltip: '搜索',
                               onPressed: () => setState(() => search = true),
@@ -745,7 +842,7 @@ class _ShelfState extends State<Shelf> {
                           child: Text('${lib.storageError} · 重试'),
                         ),
                       ),
-                    if (lib.books.isEmpty)
+                    if (lib.shelfBooks.isEmpty)
                       SliverFillRemaining(
                         hasScrollBody: false,
                         child: Center(
@@ -770,7 +867,7 @@ class _ShelfState extends State<Shelf> {
                       ),
                     if (rows.isEmpty &&
                         featured == null &&
-                        lib.books.isNotEmpty)
+                        lib.shelfBooks.isNotEmpty)
                       SliverFillRemaining(
                         hasScrollBody: false,
                         child: Center(

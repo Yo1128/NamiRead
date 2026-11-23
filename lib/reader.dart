@@ -9,6 +9,7 @@ import 'package:webview_flutter_android/webview_flutter_android.dart';
 
 import 'chapter_index.dart';
 import 'library.dart';
+import 'hub_library.dart';
 import 'reader_panes.dart';
 import 'source_client.dart';
 
@@ -17,10 +18,12 @@ class Reader extends StatefulWidget {
     this.library,
     this.book, {
     this.startChapter,
+    this.hub,
     this.openingShelf,
     this.returnLabel = '返回书架',
     super.key,
   });
+  final HubLibrary? hub;
   final int? startChapter;
   final ui.Image? openingShelf;
   final String returnLabel;
@@ -286,7 +289,9 @@ class _ReaderState extends State<Reader>
       error = null;
     });
     try {
-      final html = book.isSourceBook
+      final html = book.isHubBook
+          ? await widget.hub!.chapter(book, idx)
+          : book.isSourceBook
           ? await sourceClient.chapter(lib, book, idx)
           : await book.chapterFile(idx).readAsString();
       if (!mounted || seq != token) return;
@@ -312,7 +317,11 @@ class _ReaderState extends State<Reader>
     } catch (e) {
       if (mounted && seq == token) {
         setState(() {
-          error = book.isSourceBook ? sourceError(e) : '此章节无法打开：$e';
+          error = book.isHubBook
+              ? hubMessage(e)
+              : book.isSourceBook
+              ? sourceError(e)
+              : '此章节无法打开：$e';
           openingRevealed = true;
         });
       }

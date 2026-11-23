@@ -7,6 +7,10 @@ import 'package:path/path.dart' as p;
 
 import 'book_import.dart';
 import 'library.dart';
+import 'hub_library.dart';
+
+import 'package:nami_hub_client/nami_hub_client.dart';
+
 import 'source_model.dart';
 
 typedef BackupProgress = void Function(String message);
@@ -179,6 +183,9 @@ Future<void> exportBackup(
     }
     entries.add({
       if (book.isSourceBook) 'cached': cached,
+      if (book.meta['hubDownload'] == true &&
+          ((book.meta['hubOrigins'] as Map?)?.length ?? 0) <= 1)
+        'hubDownload': true,
       'id': book.id,
       'name': book.meta['sourceName'],
       'encoding': book.meta['encoding'],
@@ -190,7 +197,19 @@ Future<void> exportBackup(
   }
   _validateEntries(entries);
   final manifest = utf8.encode(
-    jsonEncode({'books': entries, 'settings': lib.settings}),
+    jsonEncode({
+      'books': entries,
+      'settings': lib.settings,
+      if (lib.hubShelf.isNotEmpty)
+        'hubShelf': [
+          for (final book in lib.hubShelf)
+            {
+              'meta': book.meta,
+              'position': lib.saved(book),
+              'marks': lib.marks(book),
+            },
+        ],
+    }),
   );
   _require(manifest.length <= _maxManifest, '阅读记录超过本版 16 MiB 清单上限');
   final length = ByteData(4)..setUint32(0, manifest.length);
@@ -307,6 +326,7 @@ Future<BackupSummary> stageBackup(
               encoding: e['encoding'],
             );
       meta['added'] = e['added'];
+      if (e['hubDownload'] == true) meta['hubDownload'] = true;
       final book = await stage.commit(dir, meta);
       for (final c in e['cached'] ?? []) {
         _require(c['index'] < book.chapters.length, '缓存章节不在目录中');
@@ -336,10 +356,83 @@ Future<BackupSummary> stageBackup(
       if (marks.isNotEmpty) stage.bookmarks[book.id] = marks;
       markCount += marks.length;
     }
+    final references = raw['hubShelf'] ?? [];
+    _require(references is List, '共享书目清单无效');
+    for (final record in references) {
+      _require(
+        record is Data && record['meta'] is Data && record['marks'] is List,
+        '共享书目无效',
+      );
+      final m = record['meta'] as Data;
+      _require(
+        m['hubId'] is String &&
+            m['hubItem'] is Data &&
+            m['added'] is int &&
+            m['title'] is String &&
+            m['author'] is String &&
+            m['sourceName'] is String &&
+            ['TXT', 'EPUB'].contains(m['format']),
+        '共享书目信息无效',
+      );
+      final item = HubResource.fromJson(m['hubItem']);
+      final id = HubLibrary.originKey(
+        HubLibrary.originKey(m['hubId'], item.id),
+        item.version,
+      );
+      _require(
+        m['id'] == id && stage.hubReference(id) == null && item.type == 'book',
+        '共享书目身份无效',
+      );
+      for (final list in [m['chapters'], m['toc']]) {
+        _require(
+          list is List &&
+              list.isNotEmpty &&
+              list.length <= 12000 &&
+              list.every(
+                (c) =>
+                    c is Data &&
+                    c['resource'] is String &&
+                    c['title'] is String,
+              ),
+          '共享目录无效',
+        );
+      }
+      final book = stage.hubBook({
+        for (final key in [
+          'id',
+          'added',
+          'hubId',
+          'hubItem',
+          'format',
+          'title',
+          'author',
+          'sourceName',
+          'chapters',
+          'toc',
+        ])
+          key: m[key],
+      });
+      await stage.saveHubReference(book);
+      final point = record['position'];
+      if (point != null) {
+        _validatePoint(point, book, progress: true);
+        stage.positions[id] = point;
+      }
+      final marks = record['marks'] as List;
+      for (final mark in marks) {
+        _validatePoint(mark, book, progress: false);
+      }
+      stage.bookmarks[id] = marks;
+      markCount += marks.length;
+    }
     await stage.persist();
     final error = stage.storageError;
     if (error != null) throw FileSystemException(error);
-    return BackupSummary(entries.length, stage.positions.length, markCount);
+    return BackupSummary(
+      stage.shelfBooks.length,
+      stage.positions.length,
+      markCount,
+    );
   } finally {
     await input.close();
     stage.dispose();

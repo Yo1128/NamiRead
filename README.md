@@ -2,7 +2,7 @@
 
 NamiRead 是一款 Android 本地阅读器。你可以把 TXT、EPUB 放进书架，也可以从自定义书源找书。阅读进度和书签保存在手机或平板上。
 
-[产品主页](https://yo1128.github.io/NamiRead/) · [下载 Android 版](https://github.com/Yo1128/NamiRead/releases/download/v0.5.5/NamiRead-0.5.5.apk)
+[产品主页](https://yo1128.github.io/NamiRead/) · [下载 Android 版](https://github.com/Yo1128/NamiRead/releases/download/v0.7.0/NamiRead-0.7.0-universal.apk)
 
 ## 阅读
 
@@ -11,11 +11,11 @@ NamiRead 是一款 Android 本地阅读器。你可以把 TXT、EPUB 放进书�
 - 整书下载可暂停和续传。下载完成后可离线阅读，也可另存为 UTF-8 TXT。
 - 通过本地备份迁移藏书、阅读位置、书签和设置。
 
-适用于 Android 7.0 及以上。应用使用 [MiSans 字体](https://hyperos.mi.com/font/download)。
+适用于 Android 7.0 及以上。0.7.0 启用新的分发签名。从 0.5.5 升级前，请先在旧版导出备份到应用目录之外，再卸载旧版、安装新版并导入备份。应用使用 [MiSans 字体](https://hyperos.mi.com/font/download)。
 
 ## 从 NamiHub 打开电脑上的书
 
-当前公开下载的 0.5.5 版支持本地导入和书源阅读。局域网书库已在 NamiRead 0.7.0 开发版中接入。
+NamiRead 0.7.0 支持从局域网书库分段读 TXT、按章节读 EPUB，也可下载整本离线阅读。
 
 使用 0.7.0 时，先在 Windows 上用 NamiHub 共享存书的文件夹，让手机和电脑连到同一局域网。在书架点「＋ → 浏览 NamiHub 书库」，输入电脑显示的八位配对码。点书名即可在线阅读。要在电脑关机后继续读，可从书名旁的菜单选择「下载到本机」。
 

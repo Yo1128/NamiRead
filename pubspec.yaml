@@ -1,12 +1,14 @@
 name: namiread
 description: "NamiRead 本地小说与电子书阅读器"
 publish_to: 'none'
-version: 0.5.5+17
+version: 0.7.0+20
 
 environment:
   sdk: ^3.13.5
 
 dependencies:
+  nami_hub_client:
+    path: third_party/nami_hub_client
   flutter_localizations:
     sdk: flutter
   archive: ^4.7.1

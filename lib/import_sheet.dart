@@ -102,6 +102,7 @@ class _ImportSheetState extends State<ImportSheet> {
 
   Future<String> importOne(_ImportItem item) async {
     final name = item.name, samples = item.uri == null;
+    final generation = widget.library.generation;
     if (!{'.txt', '.epub'}.contains(p.extension(name).toLowerCase())) {
       throw const FormatException('请选择 TXT 或 EPUB 文件');
     }
@@ -125,9 +126,8 @@ class _ImportSheetState extends State<ImportSheet> {
         }))!;
       }
       if (!mounted || cancelled) return '已取消';
-      final existing = widget.library.books
-          .where((b) => b.id == id)
-          .firstOrNull;
+      final existing = await widget.library.reuseLocalBook(id, generation);
+      if (!mounted || cancelled) return '已取消';
       if (existing != null) return '已在书架 · 《${existing.title}》';
       String? encoding;
       if (name.toLowerCase().endsWith('.txt')) {
@@ -146,16 +146,19 @@ class _ImportSheetState extends State<ImportSheet> {
         }
       }
       if (!mounted || cancelled) return '已取消';
-      final meta = await prepareBook(
+      final book = await finishBookImport(
+        widget.library,
         stage,
         name: name,
         id: id,
         uri: item.uri,
         encoding: encoding,
+        generation: generation,
+        check: () {
+          if (!mounted || cancelled) throw const FormatException('已取消');
+        },
       );
-      if (!mounted || cancelled) return '已取消';
-      await widget.library.commit(stage, meta);
-      return '已导入《${meta['title']}》';
+      return '已导入《${book.title}》';
     } finally {
       if (await stage.exists()) await stage.delete(recursive: true);
     }
@@ -227,6 +230,11 @@ class _ImportSheetState extends State<ImportSheet> {
                     onPressed: () => start(samples: true),
                     child: const Text('添加随附样书'),
                   ),
+                  TextButton.icon(
+                    onPressed: () => Navigator.pop(context, true),
+                    icon: const Icon(Icons.computer_outlined),
+                    label: const Text('浏览 NamiHub 书库'),
+                  ),
                 ],
               ),
               if (status.isNotEmpty) Text(status),
@@ -255,15 +263,24 @@ class _ImportSheetState extends State<ImportSheet> {
 }
 
 class EncodingPreview extends StatefulWidget {
-  const EncodingPreview(this.dir, this.name, {super.key});
+  const EncodingPreview(
+    this.dir,
+    this.name, {
+    this.hub = false,
+    this.initialEncoding = 'UTF-8',
+    super.key,
+  });
   final Directory dir;
   final String name;
+  final bool hub;
+  final String initialEncoding;
   @override
   State<EncodingPreview> createState() => _EncodingPreviewState();
 }
 
 class _EncodingPreviewState extends State<EncodingPreview> {
-  String encoding = 'UTF-8', preview = '', error = '';
+  late String encoding = widget.initialEncoding;
+  String preview = '', error = '';
   bool loading = true;
   @override
   void initState() {
@@ -281,6 +298,7 @@ class _EncodingPreviewState extends State<EncodingPreview> {
           await platform.invokeMethod<String>('decode', {
             'dir': widget.dir.path,
             'encoding': encoding,
+            if (widget.hub) 'hub': true,
           }) ??
           '';
       if (preview.trim().isEmpty) error = '没有可阅读的正文';

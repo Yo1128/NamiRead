@@ -54,7 +54,7 @@ class _BackupSheetState extends State<BackupSheet> {
         'export': exporting,
       });
       if (exporting) {
-        report('备份已保存，共 ${lib.books.length} 本书');
+        report('备份已保存，共 ${lib.shelfBooks.length} 本书');
         return;
       }
       await platform.invokeMethod('beginImport');
@@ -65,7 +65,7 @@ class _BackupSheetState extends State<BackupSheet> {
         builder: (ctx) => AlertDialog(
           title: const Text('用备份替换当前书架？'),
           content: Text(
-            '当前书架有 ${lib.books.length} 本书。备份含 ${backup.books} 本书、${backup.positions} 条进度和 ${backup.marks} 个书签。确认后将一并替换书籍、记录和设置。',
+            '当前书架有 ${lib.shelfBooks.length} 本书。备份含 ${backup.books} 本书、${backup.positions} 条进度和 ${backup.marks} 个书签。确认后将一并替换书籍、记录和设置。',
           ),
           actions: [
             TextButton(

@@ -1,6 +1,9 @@
 package app.nami.namiread
 
 import android.app.Activity
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import java.net.Inet4Address
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -27,6 +30,31 @@ class MainActivity : FlutterActivity() {
         MethodChannel(engine.dartExecutor.binaryMessenger, "app.nami/books").setMethodCallHandler { call, reply ->
             when (call.method) {
                 "root" -> reply.success(File(filesDir, "NamiRead").absolutePath)
+                "hubGateway" -> {
+                    val cm = getSystemService(ConnectivityManager::class.java)
+                    val network = cm.activeNetwork
+                    val caps = cm.getNetworkCapabilities(network)
+                    val local = caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true ||
+                        caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true
+                    val route = if (local) cm.getLinkProperties(network)?.routes?.firstOrNull {
+                        it.isDefaultRoute && it.gateway is Inet4Address
+                    } else null
+                    reply.success(route?.gateway?.hostAddress)
+                }
+                "hubCache" -> reply.success(File(noBackupFilesDir, "hub-books").absolutePath)
+                "hubSpace" -> reply.success(StatFs(noBackupFilesDir.path).availableBytes)
+                "hubConnections", "saveHubConnections" -> worker.execute {
+                    try {
+                        val vault = HubVault(this)
+                        val value = if (call.method == "hubConnections") vault.read() else {
+                            vault.write(call.argument<String>("json")!!)
+                            null
+                        }
+                        runOnUiThread { reply.success(value) }
+                    } catch (_: Exception) {
+                        runOnUiThread { reply.error("vault", "无法读取或保存受保护的主机连接", null) }
+                    }
+                }
                 "sourceDecode", "readSourceFile" -> worker.execute {
                     try {
                         val text = if (call.method == "sourceDecode") {
@@ -147,6 +175,7 @@ class MainActivity : FlutterActivity() {
                 "decode" -> {
                     val dir = File(call.argument<String>("dir")!!)
                     val charset = call.argument<String>("encoding")!!
+                    val localImport = call.argument<Boolean>("hub") != true
                     worker.execute {
                         try {
                             val decoder = Charset.forName(charset).newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)
@@ -156,7 +185,7 @@ class MainActivity : FlutterActivity() {
                                 File(dir,"decoded.txt").bufferedWriter(Charsets.UTF_8).use { sink ->
                                     val buf = CharArray(8192)
                                     while(true) {
-                                        if(cancelled.get()) throw IllegalStateException("导入已取消")
+                                        if(localImport && cancelled.get()) throw IllegalStateException("导入已取消")
                                         val n=source.read(buf)
                                         if(n<0) break
                                         if((0 until n).any { buf[it]=='\u0000' || buf[it]=='\uFFFD' }) throw IllegalArgumentException("文字编码不匹配")

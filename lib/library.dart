@@ -24,6 +24,7 @@ class Book {
   File? get cover =>
       meta['cover'] == true ? File(p.join(dir.path, 'cover.img')) : null;
   File chapterFile(int index) => File(p.join(dir.path, 'chapter-$index.html'));
+  bool get isHubBook => meta['hubItem'] is Map;
   bool get isSourceBook => meta['format'] == '书源';
   File cachedText(int index) => File(p.join(dir.path, 'cached-$index.txt'));
   int chapterAt(String? resource) =>
@@ -34,6 +35,100 @@ class Library extends ChangeNotifier {
   Library(this.root);
   final Directory root;
   final List<Book> books = [];
+  final Map<String, Book> _hubShelf = {};
+  Book? hubReference(String id) => _hubShelf[id];
+  Book hubBook(Data meta) =>
+      Book(Directory(p.join(root.path, 'hub-reading', meta['id'])), meta);
+  List<Book> get shelfBooks {
+    final referenced = {
+      for (final book in _hubShelf.values) book.meta['hubItem']['sha256'],
+    };
+    return [
+      ..._hubShelf.values,
+      ...books.where((b) => !referenced.contains(b.id)),
+    ];
+  }
+
+  Future<void> saveHubReference(Book book) => _changeShelf(() async {
+    if (_hubShelf.containsKey(book.id)) return;
+    _hubShelf[book.id] = book;
+    try {
+      await _writeSnapshot();
+    } catch (_) {
+      _hubShelf.remove(book.id);
+      rethrow;
+    }
+  });
+
+  Iterable<Book> get hubShelf => _hubShelf.values;
+  bool canRemoveHubCopy(Book local) =>
+      local.meta['hubDownload'] == true &&
+      ((local.meta['hubOrigins'] as Map?)?.length ?? 0) <= 1 &&
+      hubShelf
+              .where((ref) => ref.meta['hubItem']['sha256'] == local.id)
+              .length <=
+          1;
+  int generation = 0;
+  Book? findBook(String digest) =>
+      books.where((b) => b.id == digest).firstOrNull;
+
+  Book? hubEdition(String origin) {
+    Book? latest;
+    var newest = 0;
+    for (final book in books) {
+      final order = book.meta['hubOrigins']?[origin] as int? ?? 0;
+      if (order > newest) {
+        latest = book;
+        newest = order;
+      }
+    }
+    return latest;
+  }
+
+  Map<String, int> _associate(Data meta, String origin) {
+    final previous = hubEdition(origin);
+    return {
+      ...Map<String, int>.from(meta['hubOrigins'] ?? {}),
+      origin: (previous?.meta['hubOrigins']?[origin] as int? ?? 0) + 1,
+    };
+  }
+
+  Future<Book?> reuseHubBook(String digest, String origin, int expected) =>
+      _changeShelf(() async {
+        checkGeneration(expected);
+        final book = findBook(digest);
+        if (book == null || hubEdition(origin) == book) return book;
+        final links = _associate(book.meta, origin);
+        await _updateBookMeta(book, {'hubOrigins': links});
+        return book;
+      });
+
+  Future<Book?> reuseLocalBook(String digest, int expected) =>
+      _changeShelf(() async {
+        checkGeneration(expected);
+        final book = findBook(digest);
+        if (book != null && book.meta['hubDownload'] == true) {
+          await _updateBookMeta(book, {'hubDownload': false});
+          notifyListeners();
+        }
+        return book;
+      });
+
+  Future<void> _updateBookMeta(Book book, Data updates) async {
+    final file = File(p.join(book.dir.path, 'book.json'));
+    final next = File('${file.path}.next');
+    await next.writeAsString(
+      jsonEncode({...book.meta, ...updates}),
+      flush: true,
+    );
+    await next.rename(file.path);
+    book.meta.addAll(updates);
+  }
+
+  void checkGeneration(int expected) {
+    if (expected != generation) throw const FormatException('书架已更换，请重新添加');
+  }
+
   final _downloads = <Book, SourceDownload>{};
   SourceDownload downloadFor(Book book) =>
       _downloads.putIfAbsent(book, () => SourceDownload(this, book));
@@ -91,7 +186,9 @@ class Library extends ChangeNotifier {
   }
 
   Future<void> _loadData() async {
+    generation++;
     _clearDownloads();
+    _hubShelf.clear();
     positions = {};
     bookmarks = {};
     settings = {...defaultSettings};
@@ -104,6 +201,10 @@ class Library extends ChangeNotifier {
     final state = File(p.join(root.path, 'state.json'));
     if (await state.exists()) {
       final data = jsonDecode(await state.readAsString());
+      for (final meta in (data['hubShelf'] as List? ?? const [])) {
+        final book = hubBook(Data.from(meta));
+        _hubShelf[book.id] = book;
+      }
       positions = data['positions'] ?? {};
       bookmarks = data['marks'] ?? {};
       settings.addAll(Data.from(data['settings'] ?? {}));
@@ -153,7 +254,14 @@ class Library extends ChangeNotifier {
     }
   });
 
-  Future<Book> commit(Directory stage, Data meta) => _changeShelf(() async {
+  Future<Book> commit(
+    Directory stage,
+    Data meta, {
+    String? hubOrigin,
+    int? expectedGeneration,
+  }) => _changeShelf(() async {
+    if (expectedGeneration != null) checkGeneration(expectedGeneration);
+    if (hubOrigin != null) meta['hubOrigins'] = _associate(meta, hubOrigin);
     if (meta['format'] == '书源' &&
         books.any(
           (b) =>
@@ -212,17 +320,33 @@ class Library extends ChangeNotifier {
   }
 
   Future<void> remove(Book book) => _changeShelf(() async {
+    if (book.isHubBook) {
+      final copy = findBook(book.meta['hubItem']['sha256']);
+      if (copy != null && canRemoveHubCopy(copy)) {
+        await _removeLocal(copy);
+      }
+      _hubShelf.remove(book.id);
+      positions.remove(book.id);
+      bookmarks.remove(book.id);
+      await _writeSnapshot();
+      return;
+    }
+    await _removeLocal(book);
+  });
+
+  Future<void> _removeLocal(Book book) async {
     if (!books.contains(book)) return;
     // The rename is the commit point. A restart completes interrupted cleanup.
     final dir = await book.dir.rename(p.join(removed.path, book.id));
     books.remove(book);
     _downloads.remove(book)?.dispose();
     await _clearRemoved(dir);
-  });
+  }
 
   Future<void> _writeSnapshot() {
     final snapshot = jsonEncode({
       'schema': 1,
+      'hubShelf': [for (final book in _hubShelf.values) book.meta],
       'positions': positions,
       'settings': settings,
       'marks': bookmarks,
@@ -251,7 +375,7 @@ class Library extends ChangeNotifier {
   }
 
   Future<void> remember(Book b, int chapter, Data point) {
-    if (!books.contains(b)) return Future.value();
+    if (!books.contains(b) && !b.isHubBook) return Future.value();
     positions[b.id] = {
       ...point,
       'resource': b.chapters[chapter]['resource'],
@@ -263,7 +387,7 @@ class Library extends ChangeNotifier {
   }
 
   Book? get recent {
-    final read = books.where((b) => positions[b.id] != null).toList()
+    final read = shelfBooks.where((b) => positions[b.id] != null).toList()
       ..sort(
         (a, b) => (positions[b.id]['when'] as int).compareTo(
           positions[a.id]['when'] as int,
@@ -275,7 +399,7 @@ class Library extends ChangeNotifier {
   Data? saved(Book b) => positions[b.id] as Data?;
   List<Book> matching(String query, String filter, String sort) {
     final words = query.toLowerCase().trim().split(RegExp(r'\s+'));
-    final result = books.where((book) {
+    final result = shelfBooks.where((book) {
       final text = '${book.title} ${book.author}'.toLowerCase();
       return words.every(text.contains) &&
           (filter == '全部' || (filter == '在读') == (saved(book) != null));

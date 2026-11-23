@@ -98,9 +98,9 @@ Future<void> _txt(Directory dir, Data meta) async {
   await decoded.delete();
 }
 
-Iterable<XmlElement> _elements(XmlNode node, String tag) =>
+Iterable<XmlElement> epubElements(XmlNode node, String tag) =>
     node.descendants.whereType<XmlElement>().where((e) => e.name.local == tag);
-String _target(String source, String ref) {
+String epubTarget(String source, String ref) {
   final uri = Uri.tryParse(ref);
   if (uri == null ||
       uri.hasScheme ||
@@ -149,34 +149,37 @@ Future<void> _epub(Directory dir, Data meta) async {
     }
 
     final container = XmlDocument.parse(read('META-INF/container.xml'));
-    final root = _elements(
+    final root = epubElements(
       container,
       'rootfile',
     ).firstOrNull?.getAttribute('full-path');
     if (root == null) throw const FormatException('EPUB 未提供内容清单');
     final package = XmlDocument.parse(read(root));
-    if (_elements(package, 'meta').any(
+    if (epubElements(package, 'meta').any(
       (e) =>
           e.getAttribute('property') == 'rendition:layout' &&
           e.innerText.trim() == 'pre-paginated',
     )) {
       throw const FormatException('暂不支持固定版式 EPUB');
     }
-    final title = _elements(package, 'title').firstOrNull?.innerText.trim();
-    final author = _elements(package, 'creator').firstOrNull?.innerText.trim();
+    final title = epubElements(package, 'title').firstOrNull?.innerText.trim();
+    final author = epubElements(
+      package,
+      'creator',
+    ).firstOrNull?.innerText.trim();
     if (title?.isNotEmpty == true) meta['title'] = title;
     if (author?.isNotEmpty == true) meta['author'] = author;
     final items = {
-      for (final item in _elements(package, 'item'))
+      for (final item in epubElements(package, 'item'))
         item.getAttribute('id'): item,
     };
     String pathOf(XmlElement item) =>
-        _target(root, item.getAttribute('href') ?? '');
+        epubTarget(root, item.getAttribute('href') ?? '');
     final types = {
       for (final item in items.values)
         pathOf(item): item.getAttribute('media-type'),
     };
-    final coverId = _elements(package, 'meta')
+    final coverId = epubElements(package, 'meta')
         .where((e) => e.getAttribute('name') == 'cover')
         .firstOrNull
         ?.getAttribute('content');
@@ -225,7 +228,7 @@ Future<void> _epub(Directory dir, Data meta) async {
       for (final a in node?.querySelectorAll('a[href]') ?? <dom.Element>[]) {
         toc.add({
           'title': a.text.trim(),
-          'resource': _target(path, a.attributes['href']!),
+          'resource': epubTarget(path, a.attributes['href']!),
         });
       }
     } else {
@@ -236,25 +239,26 @@ Future<void> _epub(Directory dir, Data meta) async {
           .firstOrNull;
       if (ncx != null) {
         final path = pathOf(ncx);
-        for (final point in _elements(
+        for (final point in epubElements(
           XmlDocument.parse(read(path)),
           'navPoint',
         )) {
-          final src = _elements(
+          final src = epubElements(
             point,
             'content',
           ).firstOrNull?.getAttribute('src');
           if (src != null) {
             toc.add({
-              'title': _elements(point, 'text').firstOrNull?.innerText ?? '章节',
-              'resource': _target(path, src),
+              'title':
+                  epubElements(point, 'text').firstOrNull?.innerText ?? '章节',
+              'resource': epubTarget(path, src),
             });
           }
         }
       }
     }
     final chapters = <Data>[];
-    for (final ref in _elements(package, 'itemref')) {
+    for (final ref in epubElements(package, 'itemref')) {
       final item = items[ref.getAttribute('idref')];
       if (item == null) throw const FormatException('EPUB 正文顺序引用了缺失资源');
       final path = pathOf(item), doc = html.parse(read(path)), body = doc.body;
@@ -267,91 +271,13 @@ Future<void> _epub(Directory dir, Data meta) async {
           heading ??
           doc.querySelector('title')?.text.trim();
       var imageBudget = 0;
-      String clean(dom.Node n) {
-        if (n is dom.Text) return escape.convert(n.data);
-        if (n is! dom.Element) return '';
-        final tag = n.localName ?? '';
-        if ({
-          'script',
-          'style',
-          'object',
-          'iframe',
-          'form',
-          'video',
-          'audio',
-          'canvas',
-          'noscript',
-          'link',
-          'meta',
-        }.contains(tag)) {
-          return '';
-        }
-        final id = n.id.isEmpty ? '' : ' id="${escape.convert(n.id)}"';
-        if (tag == 'img' || tag == 'image') {
-          final key = _target(
-            path,
-            n.attributes['src'] ??
-                n.attributes['href'] ??
-                n.attributes['xlink:href'] ??
-                '',
-          );
-          final file = entries[key], mime = types[key];
-          if (file == null || !acceptedImages.contains(mime)) return '';
-          imageBudget += file.size;
-          if (imageBudget > (20 << 20)) {
-            throw const FormatException('单章插图超过读取上限');
-          }
-          return '<img$id alt="${escape.convert(n.attributes['alt'] ?? '插图')}" src="data:$mime;base64,${base64Encode(file.content)}">';
-        }
-        final children = n.nodes.map(clean).join();
-        if (tag == 'a') {
-          final target = _target(path, n.attributes['href'] ?? '');
-          return '<a$id data-target="${escape.convert(target)}" href="#">$children</a>';
-        }
-        if (tag == 'br' || tag == 'hr') return '<$tag>';
-        const allowed = {
-          'p',
-          'div',
-          'section',
-          'article',
-          'h1',
-          'h2',
-          'h3',
-          'h4',
-          'h5',
-          'h6',
-          'em',
-          'strong',
-          'b',
-          'i',
-          'blockquote',
-          'ol',
-          'ul',
-          'li',
-          'sup',
-          'sub',
-          'ruby',
-          'rt',
-          'rp',
-          'figure',
-          'figcaption',
-          'aside',
-          'span',
-          'pre',
-          'code',
-          'table',
-          'tr',
-          'td',
-          'th',
-          'dl',
-          'dt',
-          'dd',
-        };
-        final safe = allowed.contains(tag) ? tag : 'span';
-        return '<$safe$id>$children</$safe>';
-      }
-
-      final fragment = body.nodes.map(clean).join();
+      final fragment = epubMarkup(body, path, (key) {
+        final file = entries[key], mime = types[key];
+        if (file == null || !acceptedImages.contains(mime)) return null;
+        imageBudget += file.size;
+        if (imageBudget > (20 << 20)) throw const FormatException('单章插图超过读取上限');
+        return 'data:$mime;base64,${base64Encode(file.content)}';
+      });
       if (fragment.trim().isEmpty) continue;
       await File(p.join(dir.path, 'chapter-${chapters.length}.html'))
           .writeAsString(fragment);
@@ -372,4 +298,92 @@ Future<void> _epub(Directory dir, Data meta) async {
   } finally {
     await stream.close();
   }
+}
+
+String epubMarkup(
+  dom.Element body,
+  String path,
+  String? Function(String) image,
+) {
+  String clean(dom.Node n) {
+    if (n is dom.Text) return escape.convert(n.data);
+    if (n is! dom.Element) return '';
+    final tag = n.localName ?? '';
+    if ({
+      'script',
+      'style',
+      'object',
+      'iframe',
+      'form',
+      'video',
+      'audio',
+      'canvas',
+      'noscript',
+      'link',
+      'meta',
+    }.contains(tag)) {
+      return '';
+    }
+    final id = n.id.isEmpty ? '' : ' id="${escape.convert(n.id)}"';
+    if (tag == 'img' || tag == 'image') {
+      final key = epubTarget(
+        path,
+        n.attributes['src'] ??
+            n.attributes['href'] ??
+            n.attributes['xlink:href'] ??
+            '',
+      );
+      final src = image(key);
+      if (src == null) return '';
+      return '<img$id alt="${escape.convert(n.attributes['alt'] ?? '插图')}" src="$src">';
+    }
+    final children = n.nodes.map(clean).join();
+    if (tag == 'a') {
+      final target = epubTarget(path, n.attributes['href'] ?? '');
+      return '<a$id data-target="${escape.convert(target)}" href="#">$children</a>';
+    }
+    if (tag == 'br' || tag == 'hr') return '<$tag>';
+    const allowed = {
+      'p',
+      'div',
+      'section',
+      'article',
+      'h1',
+      'h2',
+      'h3',
+      'h4',
+      'h5',
+      'h6',
+      'em',
+      'strong',
+      'b',
+      'i',
+      'blockquote',
+      'ol',
+      'ul',
+      'li',
+      'sup',
+      'sub',
+      'ruby',
+      'rt',
+      'rp',
+      'figure',
+      'figcaption',
+      'aside',
+      'span',
+      'pre',
+      'code',
+      'table',
+      'tr',
+      'td',
+      'th',
+      'dl',
+      'dt',
+      'dd',
+    };
+    final safe = allowed.contains(tag) ? tag : 'span';
+    return '<$safe$id>$children</$safe>';
+  }
+
+  return body.nodes.map(clean).join();
 }

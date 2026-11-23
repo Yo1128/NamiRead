@@ -20,3 +20,7 @@ NamiRead 0.7.0 支持从局域网书库分段读 TXT、按章节读 EPUB，也�
 使用 0.7.0 时，先在 Windows 上用 NamiHub 共享存书的文件夹，让手机和电脑连到同一局域网。在书架点「＋ → 浏览 NamiHub 书库」，输入电脑显示的八位配对码。点书名即可在线阅读。要在电脑关机后继续读，可从书名旁的菜单选择「下载到本机」。
 
 [获取 NamiHub Windows 版和连接指南](https://yo1128.github.io/NamiHub/)
+
+## 从源码构建
+
+从[小米 MiSans 官网](https://hyperos.mi.com/font/download)下载可变字体，将 `MiSans-VF.ttf` 放入 `assets/fonts/`。安装 Flutter 后，在仓库根目录运行 `flutter pub get` 和 `flutter build apk --release`。官方签名安装包可从本页顶部下载。
